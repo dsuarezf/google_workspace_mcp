@@ -16,6 +16,7 @@ from gdocs.docs_helpers import (
     create_find_replace_request,
     create_insert_table_request,
     create_insert_page_break_request,
+    create_update_paragraph_style_request,
     validate_operation,
 )
 
@@ -227,6 +228,12 @@ class BatchOperationManager:
             )
             description = f"find/replace '{op['find_text']}' → '{op['replace_text']}'"
 
+        elif op_type == "update_paragraph_style":
+            request = create_update_paragraph_style_request(
+                op["start_index"], op["end_index"], op["named_style_type"]
+            )
+            description = f"apply style '{op['named_style_type']}' to paragraph {op['start_index']}-{op['end_index']}"
+
         else:
             supported_types = [
                 "insert_text",
@@ -236,6 +243,7 @@ class BatchOperationManager:
                 "insert_table",
                 "insert_page_break",
                 "find_replace",
+                "update_paragraph_style",
             ]
             raise ValueError(
                 f"Unsupported operation type '{op_type}'. Supported: {', '.join(supported_types)}"
@@ -331,6 +339,21 @@ class BatchOperationManager:
                     "optional": ["match_case"],
                     "description": "Find and replace text throughout document",
                 },
+                "update_paragraph_style": {
+                    "required": ["start_index", "end_index", "named_style_type"],
+                    "description": "Apply named paragraph style (TITLE, HEADING_1, etc.)",
+                    "valid_styles": [
+                        "TITLE",
+                        "SUBTITLE",
+                        "HEADING_1",
+                        "HEADING_2",
+                        "HEADING_3",
+                        "HEADING_4",
+                        "HEADING_5",
+                        "HEADING_6",
+                        "NORMAL_TEXT",
+                    ],
+                },
             },
             "example_operations": [
                 {"type": "insert_text", "index": 1, "text": "Hello World"},
@@ -341,5 +364,11 @@ class BatchOperationManager:
                     "bold": True,
                 },
                 {"type": "insert_table", "index": 20, "rows": 2, "columns": 3},
+                {
+                    "type": "update_paragraph_style",
+                    "start_index": 1,
+                    "end_index": 20,
+                    "named_style_type": "HEADING_1",
+                },
             ],
         }

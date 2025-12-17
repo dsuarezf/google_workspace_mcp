@@ -327,6 +327,31 @@ def create_bullet_list_request(
     }
 
 
+def create_update_paragraph_style_request(
+    start_index: int, end_index: int, named_style_type: str
+) -> Dict[str, Any]:
+    """
+    Create an updateParagraphStyle request for Google Docs API.
+
+    Args:
+        start_index: Start position of paragraph to style
+        end_index: End position of paragraph to style
+        named_style_type: Named style to apply (e.g., "TITLE", "HEADING_1", "HEADING_2",
+                         "HEADING_3", "HEADING_4", "HEADING_5", "HEADING_6",
+                         "SUBTITLE", "NORMAL_TEXT")
+
+    Returns:
+        Dictionary representing the updateParagraphStyle request
+    """
+    return {
+        "updateParagraphStyle": {
+            "range": {"startIndex": start_index, "endIndex": end_index},
+            "paragraphStyle": {"namedStyleType": named_style_type},
+            "fields": "namedStyleType",
+        }
+    }
+
+
 def validate_operation(operation: Dict[str, Any]) -> Tuple[bool, str]:
     """
     Validate a batch operation dictionary.
@@ -350,6 +375,7 @@ def validate_operation(operation: Dict[str, Any]) -> Tuple[bool, str]:
         "insert_table": ["index", "rows", "columns"],
         "insert_page_break": ["index"],
         "find_replace": ["find_text", "replace_text"],
+        "update_paragraph_style": ["start_index", "end_index", "named_style_type"],
     }
 
     if op_type not in required_fields:
@@ -358,5 +384,25 @@ def validate_operation(operation: Dict[str, Any]) -> Tuple[bool, str]:
     for field in required_fields[op_type]:
         if field not in operation:
             return False, f"Missing required field: {field}"
+
+    # Validate named_style_type if present
+    if op_type == "update_paragraph_style":
+        valid_styles = {
+            "TITLE",
+            "SUBTITLE",
+            "HEADING_1",
+            "HEADING_2",
+            "HEADING_3",
+            "HEADING_4",
+            "HEADING_5",
+            "HEADING_6",
+            "NORMAL_TEXT",
+        }
+        style = operation.get("named_style_type")
+        if style not in valid_styles:
+            return (
+                False,
+                f"Invalid named_style_type '{style}'. Must be one of: {', '.join(sorted(valid_styles))}",
+            )
 
     return True, ""
