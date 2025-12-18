@@ -151,6 +151,32 @@ def _apply_visibility_if_valid(
         )
 
 
+def _apply_event_type_if_valid(
+    event_body: Dict[str, Any],
+    event_type: Optional[str],
+    function_name: str,
+) -> None:
+    """
+    Apply event type to the event body if the provided value is valid.
+
+    Args:
+        event_body: Event payload being constructed.
+        event_type: Provided event type value.
+        function_name: Name of the calling function for logging context.
+    """
+    if event_type is None:
+        return
+
+    valid_event_types = ["default", "focusTime", "outOfOffice", "workingLocation"]
+    if event_type in valid_event_types:
+        event_body["eventType"] = event_type
+        logger.info(f"[{function_name}] Set event type to '{event_type}'")
+    else:
+        logger.warning(
+            f"[{function_name}] Invalid event type '{event_type}', must be 'default', 'focusTime', 'outOfOffice', or 'workingLocation', skipping"
+        )
+
+
 def _preserve_existing_fields(
     event_body: Dict[str, Any],
     existing_event: Dict[str, Any],
@@ -552,6 +578,7 @@ async def create_event(
     use_default_reminders: bool = True,
     transparency: Optional[str] = None,
     visibility: Optional[str] = None,
+    event_type: Optional[str] = None,
 ) -> str:
     """
     Creates a new event.
@@ -572,6 +599,7 @@ async def create_event(
         use_default_reminders (bool): Whether to use calendar's default reminders. If False, uses custom reminders. Defaults to True.
         transparency (Optional[str]): Event transparency for busy/free status. "opaque" shows as Busy (default), "transparent" shows as Available/Free. Defaults to None (uses Google Calendar default).
         visibility (Optional[str]): Event visibility. "default" uses calendar default, "public" is visible to all, "private" is visible only to attendees, "confidential" is same as private (legacy). Defaults to None (uses Google Calendar default).
+        event_type (Optional[str]): Type of event. "default" for regular events, "focusTime" for focus time (auto-declines meetings), "outOfOffice" for out-of-office, "workingLocation" for working location. Defaults to None (uses Google Calendar default).
 
     Returns:
         str: Confirmation message of the successful event creation with event link.
@@ -630,6 +658,9 @@ async def create_event(
 
     # Handle visibility validation
     _apply_visibility_if_valid(event_body, visibility, "create_event")
+
+    # Handle event type validation
+    _apply_event_type_if_valid(event_body, event_type, "create_event")
 
     if add_google_meet:
         request_id = str(uuid.uuid4())
@@ -763,6 +794,7 @@ async def modify_event(
     use_default_reminders: Optional[bool] = None,
     transparency: Optional[str] = None,
     visibility: Optional[str] = None,
+    event_type: Optional[str] = None,
 ) -> str:
     """
     Modifies an existing event.
@@ -783,6 +815,7 @@ async def modify_event(
         use_default_reminders (Optional[bool]): Whether to use calendar's default reminders. If specified, overrides current reminder settings.
         transparency (Optional[str]): Event transparency for busy/free status. "opaque" shows as Busy, "transparent" shows as Available/Free. If None, preserves existing transparency setting.
         visibility (Optional[str]): Event visibility. "default" uses calendar default, "public" is visible to all, "private" is visible only to attendees, "confidential" is same as private (legacy). If None, preserves existing visibility setting.
+        event_type (Optional[str]): Type of event. "default" for regular events, "focusTime" for focus time, "outOfOffice" for out-of-office, "workingLocation" for working location. If None, preserves existing event type.
 
     Returns:
         str: Confirmation message of the successful event modification with event link.
@@ -864,6 +897,9 @@ async def modify_event(
 
     # Handle visibility validation
     _apply_visibility_if_valid(event_body, visibility, "modify_event")
+
+    # Handle event type validation
+    _apply_event_type_if_valid(event_body, event_type, "modify_event")
 
     if timezone is not None and "start" not in event_body and "end" not in event_body:
         # If timezone is provided but start/end times are not, we need to fetch the existing event
