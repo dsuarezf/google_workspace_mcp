@@ -183,8 +183,8 @@ def _apply_event_type_if_valid(
                 "chatStatus": "doNotDisturb"
             }
             event_body["transparency"] = "opaque"
-            # Set green color (Sage) for focus time events
-            event_body["colorId"] = "11"
+            # Set green color (Basil) for focus time events
+            event_body["colorId"] = "10"
             logger.info(f"[{function_name}] Added focusTimeProperties, transparency 'opaque', and green colorId for focus time event")
     else:
         logger.warning(
@@ -817,6 +817,7 @@ async def modify_event(
     transparency: Optional[str] = None,
     visibility: Optional[str] = None,
     event_type: Optional[str] = None,
+    color_id: Optional[str] = None,
 ) -> str:
     """
     Modifies an existing event.
@@ -838,6 +839,7 @@ async def modify_event(
         transparency (Optional[str]): Event transparency for busy/free status. "opaque" shows as Busy, "transparent" shows as Available/Free. If None, preserves existing transparency setting.
         visibility (Optional[str]): Event visibility. "default" uses calendar default, "public" is visible to all, "private" is visible only to attendees, "confidential" is same as private (legacy). If None, preserves existing visibility setting.
         event_type (Optional[str]): Type of event. "default" for regular events, "focusTime" for focus time, "outOfOffice" for out-of-office, "workingLocation" for working location. If None, preserves existing event type.
+        color_id (Optional[str]): Color ID for the event. Valid values: "1" (Lavender), "2" (Sage), "3" (Grape), "4" (Flamingo), "5" (Banana), "6" (Tangerine), "7" (Peacock), "8" (Graphite), "9" (Blueberry), "10" (Basil/Green), "11" (Tomato/Red). If None, preserves existing color.
 
     Returns:
         str: Confirmation message of the successful event modification with event link.
@@ -922,6 +924,11 @@ async def modify_event(
 
     # Handle event type validation
     _apply_event_type_if_valid(event_body, event_type, "modify_event")
+
+    # Apply color_id if provided and not already set by event_type
+    if color_id is not None and "colorId" not in event_body:
+        event_body["colorId"] = color_id
+        logger.info(f"[modify_event] Set colorId to '{color_id}'")
 
     if timezone is not None and "start" not in event_body and "end" not in event_body:
         # If timezone is provided but start/end times are not, we need to fetch the existing event
