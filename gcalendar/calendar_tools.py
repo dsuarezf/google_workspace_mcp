@@ -972,6 +972,29 @@ async def modify_event(
             },
         )
 
+        # Preserve start and end times if not provided
+        if start_time is None and "start" in existing_event:
+            event_body["start"] = existing_event["start"]
+            logger.info("[modify_event] Preserving existing start time")
+        if end_time is None and "end" in existing_event:
+            event_body["end"] = existing_event["end"]
+            logger.info("[modify_event] Preserving existing end time")
+
+        # Preserve eventType and related properties if not explicitly changing event type
+        if event_type is None and "eventType" in existing_event:
+            event_body["eventType"] = existing_event["eventType"]
+            logger.info(f"[modify_event] Preserving existing eventType: {existing_event['eventType']}")
+
+            # Preserve focusTimeProperties for focus time events
+            if existing_event["eventType"] == "focusTime":
+                if "focusTimeProperties" in existing_event:
+                    event_body["focusTimeProperties"] = existing_event["focusTimeProperties"]
+                    logger.info("[modify_event] Preserving existing focusTimeProperties")
+                # Preserve transparency for focus time events (required field)
+                if transparency is None and "transparency" in existing_event:
+                    event_body["transparency"] = existing_event["transparency"]
+                    logger.info("[modify_event] Preserving existing transparency for focusTime event")
+
         # Handle Google Meet conference data
         if add_google_meet is not None:
             if add_google_meet:
@@ -1008,6 +1031,7 @@ async def modify_event(
             )
 
     # Proceed with the update
+    logger.info(f"[modify_event] Final event_body before API call: {event_body}")
     updated_event = await asyncio.to_thread(
         lambda: service.events()
         .update(
