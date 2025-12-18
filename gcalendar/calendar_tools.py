@@ -159,6 +159,10 @@ def _apply_event_type_if_valid(
     """
     Apply event type to the event body if the provided value is valid.
 
+    For focusTime events, also sets required fields:
+    - focusTimeProperties (required by API)
+    - transparency to 'opaque' (required for proper focus time behavior)
+
     Args:
         event_body: Event payload being constructed.
         event_type: Provided event type value.
@@ -171,6 +175,17 @@ def _apply_event_type_if_valid(
     if event_type in valid_event_types:
         event_body["eventType"] = event_type
         logger.info(f"[{function_name}] Set event type to '{event_type}'")
+
+        # Focus time events require additional properties
+        if event_type == "focusTime":
+            event_body["focusTimeProperties"] = {
+                "autoDeclineMode": "declineOnlyNewConflictingInvitations",
+                "chatStatus": "doNotDisturb"
+            }
+            event_body["transparency"] = "opaque"
+            # Set green color (Sage) for focus time events
+            event_body["colorId"] = "11"
+            logger.info(f"[{function_name}] Added focusTimeProperties, transparency 'opaque', and green colorId for focus time event")
     else:
         logger.warning(
             f"[{function_name}] Invalid event type '{event_type}', must be 'default', 'focusTime', 'outOfOffice', or 'workingLocation', skipping"
@@ -579,6 +594,7 @@ async def create_event(
     transparency: Optional[str] = None,
     visibility: Optional[str] = None,
     event_type: Optional[str] = None,
+    color_id: Optional[str] = None,
 ) -> str:
     """
     Creates a new event.
@@ -600,6 +616,7 @@ async def create_event(
         transparency (Optional[str]): Event transparency for busy/free status. "opaque" shows as Busy (default), "transparent" shows as Available/Free. Defaults to None (uses Google Calendar default).
         visibility (Optional[str]): Event visibility. "default" uses calendar default, "public" is visible to all, "private" is visible only to attendees, "confidential" is same as private (legacy). Defaults to None (uses Google Calendar default).
         event_type (Optional[str]): Type of event. "default" for regular events, "focusTime" for focus time (auto-declines meetings), "outOfOffice" for out-of-office, "workingLocation" for working location. Defaults to None (uses Google Calendar default).
+        color_id (Optional[str]): Color ID for the event. Valid values: "1" (Lavender), "2" (Sage), "3" (Grape), "4" (Flamingo), "5" (Banana), "6" (Tangerine), "7" (Peacock), "8" (Graphite), "9" (Blueberry), "10" (Basil/Green), "11" (Tomato/Red). Defaults to None (uses calendar default).
 
     Returns:
         str: Confirmation message of the successful event creation with event link.
@@ -661,6 +678,11 @@ async def create_event(
 
     # Handle event type validation
     _apply_event_type_if_valid(event_body, event_type, "create_event")
+
+    # Apply color_id if provided and not already set by event_type
+    if color_id is not None and "colorId" not in event_body:
+        event_body["colorId"] = color_id
+        logger.info(f"[create_event] Set colorId to '{color_id}'")
 
     if add_google_meet:
         request_id = str(uuid.uuid4())
