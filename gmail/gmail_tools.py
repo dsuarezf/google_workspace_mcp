@@ -8,9 +8,11 @@ import logging
 import asyncio
 import base64
 import ssl
+import re
 from typing import Optional, List, Dict, Literal, Any
 
 from email.mime.text import MIMEText
+from bs4 import BeautifulSoup
 
 from fastapi import Body
 from pydantic import Field
@@ -30,6 +32,7 @@ logger = logging.getLogger(__name__)
 GMAIL_BATCH_SIZE = 25
 GMAIL_REQUEST_DELAY = 0.1
 HTML_BODY_TRUNCATE_LIMIT = 20000
+HTML_TEXT_PREVIEW_LIMIT = 15000  # Limit for converted HTML text
 
 
 def _extract_message_body(payload):
@@ -102,7 +105,7 @@ def _extract_message_bodies(payload):
 
 def _format_body_content(text_body: str, html_body: str) -> str:
     """
-    Helper function to format message body content with HTML fallback and truncation.
+    Helper function to format message body content with HTML to text conversion.
 
     Args:
         text_body: Plain text body content
@@ -114,12 +117,17 @@ def _format_body_content(text_body: str, html_body: str) -> str:
     if text_body.strip():
         return text_body
     elif html_body.strip():
-        # Truncate very large HTML to keep responses manageable
-        if len(html_body) > HTML_BODY_TRUNCATE_LIMIT:
-            html_body = (
-                html_body[:HTML_BODY_TRUNCATE_LIMIT] + "\n\n[HTML content truncated...]"
+        # Convert HTML to readable plain text
+        converted_text = _convert_html_to_text(html_body)
+
+        # Truncate very large converted text to keep responses manageable
+        if len(converted_text) > HTML_TEXT_PREVIEW_LIMIT:
+            converted_text = (
+                converted_text[:HTML_TEXT_PREVIEW_LIMIT]
+                + "\n\n[Content truncated for length...]"
             )
-        return f"[HTML Content Converted]\n{html_body}"
+
+        return f"[Converted from HTML]\n{converted_text}"
     else:
         return "[No readable content found]"
 
@@ -175,6 +183,115 @@ def _extract_headers(payload: dict, header_names: List[str]) -> Dict[str, str]:
         if header["name"] in header_names:
             headers[header["name"]] = header["value"]
     return headers
+
+
+def _convert_html_to_text(html: str) -> str:
+    """
+    Convert HTML content to readable plain text using BeautifulSoup.
+
+    Args:
+        html: HTML string to convert
+
+    Returns:
+        Plain text representation of the HTML
+    """
+    if not html or not html.strip():
+        return ""
+
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # Remove script and style elements
+        for script in soup(["script", "style"]):
+            script.decompose()
+
+        # Get text and clean up whitespace
+        text = soup.get_text(separator='\n')
+
+        # Clean up excessive newlines and whitespace
+        lines = (line.strip() for line in text.splitlines())
+        text = '\n'.join(line for line in lines if line)
+
+        return text
+    except Exception as e:
+        logger.warning(f"Failed to convert HTML to text: {e}")
+        return html  # Fallback to raw HTML
+
+
+def _extract_images_from_html(html: str) -> List[Dict[str, str]]:
+    """
+    Extract image URLs and metadata from HTML content.
+
+    Args:
+        html: HTML string to parse
+
+    Returns:
+        List of dictionaries containing image metadata (url, alt text, etc.)
+    """
+    if not html or not html.strip():
+        return []
+
+    images = []
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+
+        for img in soup.find_all('img'):
+            image_data = {}
+
+            # Extract src (required)
+            src = img.get('src')
+            if src:
+                image_data['url'] = src
+                image_data['alt'] = img.get('alt', '')
+                image_data['title'] = img.get('title', '')
+
+                # Determine if it's inline or external
+                if src.startswith('cid:'):
+                    image_data['type'] = 'inline'
+                    image_data['content_id'] = src[4:]  # Remove 'cid:' prefix
+                elif src.startswith(('http://', 'https://')):
+                    image_data['type'] = 'external'
+                elif src.startswith('data:'):
+                    image_data['type'] = 'embedded'
+                else:
+                    image_data['type'] = 'unknown'
+
+                images.append(image_data)
+    except Exception as e:
+        logger.warning(f"Failed to extract images from HTML: {e}")
+
+    return images
+
+
+def _extract_links_from_html(html: str) -> List[Dict[str, str]]:
+    """
+    Extract links (anchor tags) from HTML content.
+
+    Args:
+        html: HTML string to parse
+
+    Returns:
+        List of dictionaries containing link metadata (url, text)
+    """
+    if not html or not html.strip():
+        return []
+
+    links = []
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+
+        for link in soup.find_all('a'):
+            href = link.get('href')
+            if href:
+                links.append({
+                    'url': href,
+                    'text': link.get_text(strip=True),
+                    'title': link.get('title', '')
+                })
+    except Exception as e:
+        logger.warning(f"Failed to extract links from HTML: {e}")
+
+    return links
 
 
 def _prepare_gmail_message(
@@ -468,6 +585,13 @@ async def get_gmail_message_content(
     # Extract attachment metadata
     attachments = _extract_attachments(payload)
 
+    # Extract images and links from HTML (if HTML body exists)
+    images = []
+    links = []
+    if html_body:
+        images = _extract_images_from_html(html_body)
+        links = _extract_links_from_html(html_body)
+
     content_lines = [
         f"Subject: {subject}",
         f"From:    {sender}",
@@ -479,6 +603,45 @@ async def get_gmail_message_content(
         content_lines.append(f"Cc:      {cc}")
 
     content_lines.append(f"\n--- BODY ---\n{body_data or '[No text/plain body found]'}")
+
+    # Add images information if present in HTML
+    if images:
+        content_lines.append("\n--- IMAGES ---")
+        for i, img in enumerate(images, 1):
+            img_type = img.get('type', 'unknown')
+            img_url = img.get('url', '')
+            img_alt = img.get('alt', '')
+
+            if img_type == 'inline':
+                content_lines.append(
+                    f"{i}. [Inline Image] Content-ID: {img.get('content_id', 'unknown')}"
+                )
+                if img_alt:
+                    content_lines.append(f"   Alt text: {img_alt}")
+            elif img_type == 'external':
+                content_lines.append(f"{i}. [External Image] {img_url}")
+                if img_alt:
+                    content_lines.append(f"   Alt text: {img_alt}")
+            elif img_type == 'embedded':
+                content_lines.append(f"{i}. [Embedded Image] (base64 data)")
+                if img_alt:
+                    content_lines.append(f"   Alt text: {img_alt}")
+
+    # Add links information if present in HTML
+    if links:
+        content_lines.append("\n--- LINKS ---")
+        # Limit to first 20 links to avoid overwhelming output
+        max_links = 20
+        for i, link in enumerate(links[:max_links], 1):
+            link_text = link.get('text', '(no text)')
+            link_url = link.get('url', '')
+            if link_text and link_text != link_url:
+                content_lines.append(f"{i}. {link_text} → {link_url}")
+            else:
+                content_lines.append(f"{i}. {link_url}")
+
+        if len(links) > max_links:
+            content_lines.append(f"   ... and {len(links) - max_links} more links")
 
     # Add attachment information if present
     if attachments:
