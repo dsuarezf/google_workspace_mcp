@@ -595,6 +595,7 @@ async def create_event(
     visibility: Optional[str] = None,
     event_type: Optional[str] = None,
     color_id: Optional[str] = None,
+    recurrence: Optional[List[str]] = None,
 ) -> str:
     """
     Creates a new event.
@@ -617,6 +618,14 @@ async def create_event(
         visibility (Optional[str]): Event visibility. "default" uses calendar default, "public" is visible to all, "private" is visible only to attendees, "confidential" is same as private (legacy). Defaults to None (uses Google Calendar default).
         event_type (Optional[str]): Type of event. "default" for regular events, "focusTime" for focus time (auto-declines meetings), "outOfOffice" for out-of-office, "workingLocation" for working location. Defaults to None (uses Google Calendar default).
         color_id (Optional[str]): Color ID for the event. Valid values: "1" (Lavender), "2" (Sage), "3" (Grape), "4" (Flamingo), "5" (Banana), "6" (Tangerine), "7" (Peacock), "8" (Graphite), "9" (Blueberry), "10" (Basil/Green), "11" (Tomato/Red). Defaults to None (uses calendar default).
+        recurrence (Optional[List[str]]): Recurrence rules in RRULE format (RFC 5545). Defines repeating event patterns. Examples:
+            - Weekly on Thursdays until May 7, 2026: ["RRULE:FREQ=WEEKLY;BYDAY=TH;UNTIL=20260507T130000Z"]
+            - Daily for 10 occurrences: ["RRULE:FREQ=DAILY;COUNT=10"]
+            - Weekly on Monday, Wednesday, Friday: ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"]
+            - Monthly on the 15th: ["RRULE:FREQ=MONTHLY;BYMONTHDAY=15"]
+            - Every weekday (Mon-Fri): ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]
+            Note: When using UNTIL, the datetime must be in UTC format (ending with 'Z').
+            The start_time and end_time define the first occurrence; recurrence rules repeat this pattern.
 
     Returns:
         str: Confirmation message of the successful event creation with event link.
@@ -683,6 +692,11 @@ async def create_event(
     if color_id is not None and "colorId" not in event_body:
         event_body["colorId"] = color_id
         logger.info(f"[create_event] Set colorId to '{color_id}'")
+
+    # Handle recurrence rules
+    if recurrence:
+        event_body["recurrence"] = recurrence
+        logger.info(f"[create_event] Added recurrence rules: {recurrence}")
 
     if add_google_meet:
         request_id = str(uuid.uuid4())
