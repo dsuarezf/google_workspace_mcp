@@ -26,6 +26,7 @@ drive:
   extended:
     - list_drive_items
     - update_drive_file
+    - get_drive_file_download_url
   complete:
     - get_drive_file_permissions
     - check_drive_file_public_access
