@@ -9,6 +9,7 @@ import asyncio
 import base64
 import ssl
 import re
+from html.parser import HTMLParser
 from typing import Optional, List, Dict, Literal, Any
 
 from email.mime.text import MIMEText
@@ -32,7 +33,40 @@ logger = logging.getLogger(__name__)
 GMAIL_BATCH_SIZE = 25
 GMAIL_REQUEST_DELAY = 0.1
 HTML_BODY_TRUNCATE_LIMIT = 20000
-HTML_TEXT_PREVIEW_LIMIT = 15000  # Limit for converted HTML text
+GMAIL_METADATA_HEADERS = ["Subject", "From", "To", "Cc", "Message-ID", "Date"]
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """Extract readable text from HTML using stdlib."""
+
+    def __init__(self):
+        super().__init__()
+        self._text = []
+        self._skip = False
+
+    def handle_starttag(self, tag, attrs):
+        self._skip = tag in ("script", "style")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style"):
+            self._skip = False
+
+    def handle_data(self, data):
+        if not self._skip:
+            self._text.append(data)
+
+    def get_text(self) -> str:
+        return " ".join("".join(self._text).split())
+
+
+def _html_to_text(html: str) -> str:
+    """Convert HTML to readable plain text."""
+    try:
+        parser = _HTMLTextExtractor()
+        parser.feed(html)
+        return parser.get_text()
+    except Exception:
+        return html
 
 
 def _extract_message_body(payload):
@@ -105,7 +139,8 @@ def _extract_message_bodies(payload):
 
 def _format_body_content(text_body: str, html_body: str) -> str:
     """
-    Helper function to format message body content with HTML to text conversion.
+    Helper function to format message body content with HTML fallback and truncation.
+    Detects useless text/plain fallbacks (e.g., "Your client does not support HTML").
 
     Args:
         text_body: Plain text body content
@@ -114,20 +149,23 @@ def _format_body_content(text_body: str, html_body: str) -> str:
     Returns:
         Formatted body content string
     """
-    if text_body.strip():
+    text_stripped = text_body.strip()
+    html_stripped = html_body.strip()
+
+    # Detect useless fallback: HTML comments in text, or HTML is 50x+ longer
+    use_html = html_stripped and (
+        not text_stripped
+        or "<!--" in text_stripped
+        or len(html_stripped) > len(text_stripped) * 50
+    )
+
+    if use_html:
+        content = _html_to_text(html_stripped)
+        if len(content) > HTML_BODY_TRUNCATE_LIMIT:
+            content = content[:HTML_BODY_TRUNCATE_LIMIT] + "\n\n[Content truncated...]"
+        return content
+    elif text_stripped:
         return text_body
-    elif html_body.strip():
-        # Convert HTML to readable plain text
-        converted_text = _convert_html_to_text(html_body)
-
-        # Truncate very large converted text to keep responses manageable
-        if len(converted_text) > HTML_TEXT_PREVIEW_LIMIT:
-            converted_text = (
-                converted_text[:HTML_TEXT_PREVIEW_LIMIT]
-                + "\n\n[Content truncated for length...]"
-            )
-
-        return f"[Converted from HTML]\n{converted_text}"
     else:
         return "[No readable content found]"
 
@@ -179,9 +217,12 @@ def _extract_headers(payload: dict, header_names: List[str]) -> Dict[str, str]:
         Dict mapping header names to their values
     """
     headers = {}
+    target_headers = {name.lower(): name for name in header_names}
     for header in payload.get("headers", []):
-        if header["name"] in header_names:
-            headers[header["name"]] = header["value"]
+        header_name_lower = header["name"].lower()
+        if header_name_lower in target_headers:
+            # Store using the original requested casing
+            headers[target_headers[header_name_lower]] = header["value"]
     return headers
 
 
@@ -531,7 +572,7 @@ async def get_gmail_message_content(
         user_google_email (str): The user's Google email address. Required.
 
     Returns:
-        str: The message details including subject, sender, recipients (To, Cc), and body content.
+        str: The message details including subject, sender, date, Message-ID, recipients (To, Cc), and body content.
     """
     logger.info(
         f"[get_gmail_message_content] Invoked. Message ID: '{message_id}', Email: '{user_google_email}'"
@@ -547,19 +588,19 @@ async def get_gmail_message_content(
             userId="me",
             id=message_id,
             format="metadata",
-            metadataHeaders=["Subject", "From", "To", "Cc"],
+            metadataHeaders=GMAIL_METADATA_HEADERS,
         )
         .execute
     )
 
-    headers = {
-        h["name"]: h["value"]
-        for h in message_metadata.get("payload", {}).get("headers", [])
-    }
+    headers = _extract_headers(
+        message_metadata.get("payload", {}), GMAIL_METADATA_HEADERS
+    )
     subject = headers.get("Subject", "(no subject)")
     sender = headers.get("From", "(unknown sender)")
     to = headers.get("To", "")
     cc = headers.get("Cc", "")
+    rfc822_msg_id = headers.get("Message-ID", "")
 
     # Now fetch the full message to get the body parts
     message_full = await asyncio.to_thread(
@@ -595,7 +636,11 @@ async def get_gmail_message_content(
     content_lines = [
         f"Subject: {subject}",
         f"From:    {sender}",
+        f"Date:    {headers.get('Date', '(unknown date)')}",
     ]
+
+    if rfc822_msg_id:
+        content_lines.append(f"Message-ID: {rfc822_msg_id}")
 
     if to:
         content_lines.append(f"To:      {to}")
@@ -678,7 +723,7 @@ async def get_gmail_messages_content_batch(
         format (Literal["full", "metadata"]): Message format. "full" includes body, "metadata" only headers.
 
     Returns:
-        str: A formatted list of message contents including subject, sender, recipients (To, Cc), and body (if full format).
+        str: A formatted list of message contents including subject, sender, date, Message-ID, recipients (To, Cc), and body (if full format).
     """
     logger.info(
         f"[get_gmail_messages_content_batch] Invoked. Message count: {len(message_ids)}, Email: '{user_google_email}'"
@@ -711,7 +756,7 @@ async def get_gmail_messages_content_batch(
                             userId="me",
                             id=mid,
                             format="metadata",
-                            metadataHeaders=["Subject", "From", "To", "Cc"],
+                            metadataHeaders=GMAIL_METADATA_HEADERS,
                         )
                     )
                 else:
@@ -743,7 +788,7 @@ async def get_gmail_messages_content_batch(
                                     userId="me",
                                     id=mid,
                                     format="metadata",
-                                    metadataHeaders=["Subject", "From", "To", "Cc"],
+                                    metadataHeaders=GMAIL_METADATA_HEADERS,
                                 )
                                 .execute
                             )
@@ -794,15 +839,20 @@ async def get_gmail_messages_content_batch(
                 payload = message.get("payload", {})
 
                 if format == "metadata":
-                    headers = _extract_headers(payload, ["Subject", "From", "To", "Cc"])
+                    headers = _extract_headers(payload, GMAIL_METADATA_HEADERS)
                     subject = headers.get("Subject", "(no subject)")
                     sender = headers.get("From", "(unknown sender)")
                     to = headers.get("To", "")
                     cc = headers.get("Cc", "")
+                    rfc822_msg_id = headers.get("Message-ID", "")
 
                     msg_output = (
                         f"Message ID: {mid}\nSubject: {subject}\nFrom: {sender}\n"
+                        f"Date: {headers.get('Date', '(unknown date)')}\n"
                     )
+                    if rfc822_msg_id:
+                        msg_output += f"Message-ID: {rfc822_msg_id}\n"
+
                     if to:
                         msg_output += f"To: {to}\n"
                     if cc:
@@ -812,11 +862,12 @@ async def get_gmail_messages_content_batch(
                     output_messages.append(msg_output)
                 else:
                     # Full format - extract body too
-                    headers = _extract_headers(payload, ["Subject", "From", "To", "Cc"])
+                    headers = _extract_headers(payload, GMAIL_METADATA_HEADERS)
                     subject = headers.get("Subject", "(no subject)")
                     sender = headers.get("From", "(unknown sender)")
                     to = headers.get("To", "")
                     cc = headers.get("Cc", "")
+                    rfc822_msg_id = headers.get("Message-ID", "")
 
                     # Extract both text and HTML bodies using enhanced helper function
                     bodies = _extract_message_bodies(payload)
@@ -828,7 +879,11 @@ async def get_gmail_messages_content_batch(
 
                     msg_output = (
                         f"Message ID: {mid}\nSubject: {subject}\nFrom: {sender}\n"
+                        f"Date: {headers.get('Date', '(unknown date)')}\n"
                     )
+                    if rfc822_msg_id:
+                        msg_output += f"Message-ID: {rfc822_msg_id}\n"
+
                     if to:
                         msg_output += f"To: {to}\n"
                     if cc:
@@ -1008,6 +1063,10 @@ async def send_gmail_message(
     ),
     cc: Optional[str] = Body(None, description="Optional CC email address."),
     bcc: Optional[str] = Body(None, description="Optional BCC email address."),
+    from_email: Optional[str] = Body(
+        None,
+        description="Optional 'Send As' alias email address. Must be configured in Gmail settings (Settings > Accounts > Send mail as). If not provided, uses the authenticated user's email.",
+    ),
     thread_id: Optional[str] = Body(
         None, description="Optional Gmail thread ID to reply within."
     ),
@@ -1020,6 +1079,7 @@ async def send_gmail_message(
 ) -> str:
     """
     Sends an email using the user's Gmail account. Supports both new emails and replies.
+    Supports Gmail's "Send As" feature to send from configured alias addresses.
 
     Args:
         to (str): Recipient email address.
@@ -1028,7 +1088,10 @@ async def send_gmail_message(
         body_format (Literal['plain', 'html']): Email body format. Defaults to 'plain'.
         cc (Optional[str]): Optional CC email address.
         bcc (Optional[str]): Optional BCC email address.
-        user_google_email (str): The user's Google email address. Required.
+        from_email (Optional[str]): Optional 'Send As' alias email address. The alias must be
+            configured in Gmail settings (Settings > Accounts > Send mail as). If not provided,
+            the email will be sent from the authenticated user's primary email address.
+        user_google_email (str): The user's Google email address. Required for authentication.
         thread_id (Optional[str]): Optional Gmail thread ID to reply within. When provided, sends a reply.
         in_reply_to (Optional[str]): Optional Message-ID of the message being replied to. Used for proper threading.
         references (Optional[str]): Optional chain of Message-IDs for proper threading. Should include all previous Message-IDs.
@@ -1046,6 +1109,14 @@ async def send_gmail_message(
             subject="Hello",
             body="<strong>Hi there!</strong>",
             body_format="html"
+        )
+
+        # Send from a configured alias (Send As)
+        send_gmail_message(
+            to="user@example.com",
+            subject="Business Inquiry",
+            body="Hello from my business address...",
+            from_email="business@mydomain.com"
         )
 
         # Send an email with CC and BCC
@@ -1072,6 +1143,8 @@ async def send_gmail_message(
     )
 
     # Prepare the email message
+    # Use from_email (Send As alias) if provided, otherwise default to authenticated user
+    sender_email = from_email or user_google_email
     raw_message, thread_id_final = _prepare_gmail_message(
         subject=subject,
         body=body,
@@ -1082,7 +1155,7 @@ async def send_gmail_message(
         in_reply_to=in_reply_to,
         references=references,
         body_format=body_format,
-        from_email=user_google_email,
+        from_email=sender_email,
     )
 
     send_body = {"raw": raw_message}
@@ -1114,6 +1187,10 @@ async def draft_gmail_message(
     to: Optional[str] = Body(None, description="Optional recipient email address."),
     cc: Optional[str] = Body(None, description="Optional CC email address."),
     bcc: Optional[str] = Body(None, description="Optional BCC email address."),
+    from_email: Optional[str] = Body(
+        None,
+        description="Optional 'Send As' alias email address. Must be configured in Gmail settings (Settings > Accounts > Send mail as). If not provided, uses the authenticated user's email.",
+    ),
     thread_id: Optional[str] = Body(
         None, description="Optional Gmail thread ID to reply within."
     ),
@@ -1126,15 +1203,19 @@ async def draft_gmail_message(
 ) -> str:
     """
     Creates a draft email in the user's Gmail account. Supports both new drafts and reply drafts.
+    Supports Gmail's "Send As" feature to draft from configured alias addresses.
 
     Args:
-        user_google_email (str): The user's Google email address. Required.
+        user_google_email (str): The user's Google email address. Required for authentication.
         subject (str): Email subject.
         body (str): Email body (plain text).
         body_format (Literal['plain', 'html']): Email body format. Defaults to 'plain'.
         to (Optional[str]): Optional recipient email address. Can be left empty for drafts.
         cc (Optional[str]): Optional CC email address.
         bcc (Optional[str]): Optional BCC email address.
+        from_email (Optional[str]): Optional 'Send As' alias email address. The alias must be
+            configured in Gmail settings (Settings > Accounts > Send mail as). If not provided,
+            the draft will be from the authenticated user's primary email address.
         thread_id (Optional[str]): Optional Gmail thread ID to reply within. When provided, creates a reply draft.
         in_reply_to (Optional[str]): Optional Message-ID of the message being replied to. Used for proper threading.
         references (Optional[str]): Optional chain of Message-IDs for proper threading. Should include all previous Message-IDs.
@@ -1145,6 +1226,14 @@ async def draft_gmail_message(
     Examples:
         # Create a new draft
         draft_gmail_message(subject="Hello", body="Hi there!", to="user@example.com")
+
+        # Create a draft from a configured alias (Send As)
+        draft_gmail_message(
+            subject="Business Inquiry",
+            body="Hello from my business address...",
+            to="user@example.com",
+            from_email="business@mydomain.com"
+        )
 
         # Create a plaintext draft with CC and BCC
         draft_gmail_message(
@@ -1179,7 +1268,7 @@ async def draft_gmail_message(
         draft_gmail_message(
             subject="Re: Meeting tomorrow",
             body="<strong>Thanks for the update!</strong>",
-            body_format="html,
+            body_format="html",
             to="user@example.com",
             thread_id="thread_123",
             in_reply_to="<message123@gmail.com>",
@@ -1191,6 +1280,8 @@ async def draft_gmail_message(
     )
 
     # Prepare the email message
+    # Use from_email (Send As alias) if provided, otherwise default to authenticated user
+    sender_email = from_email or user_google_email
     raw_message, thread_id_final = _prepare_gmail_message(
         subject=subject,
         body=body,
@@ -1201,7 +1292,7 @@ async def draft_gmail_message(
         thread_id=thread_id,
         in_reply_to=in_reply_to,
         references=references,
-        from_email=user_google_email,
+        from_email=sender_email,
     )
 
     # Create a draft instead of sending

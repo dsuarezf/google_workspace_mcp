@@ -365,8 +365,8 @@ async def modify_doc_text(
     underline: bool = None,
     font_size: int = None,
     font_family: str = None,
-    text_color: Any = None,
-    background_color: Any = None,
+    text_color: str = None,
+    background_color: str = None,
 ) -> str:
     """
     Modifies text in a Google Doc - can insert/replace text and/or apply formatting in a single operation.
@@ -382,8 +382,8 @@ async def modify_doc_text(
         underline: Whether to underline text (True/False/None to leave unchanged)
         font_size: Font size in points
         font_family: Font family name (e.g., "Arial", "Times New Roman")
-        text_color: Foreground text color (#RRGGBB or RGB tuple/list)
-        background_color: Background/highlight color (#RRGGBB or RGB tuple/list)
+        text_color: Foreground text color (#RRGGBB)
+        background_color: Background/highlight color (#RRGGBB)
 
     Returns:
         str: Confirmation message with operation details
@@ -1261,7 +1261,7 @@ async def export_doc_to_pdf(
     # Export the document as PDF
     try:
         request_obj = service.files().export_media(
-            fileId=document_id, mimeType="application/pdf", supportsAllDrives=True
+            fileId=document_id, mimeType="application/pdf"
         )
 
         fh = io.BytesIO()

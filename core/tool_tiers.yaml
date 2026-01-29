@@ -6,8 +6,8 @@ gmail:
     - send_gmail_message
 
   extended:
-    - get_gmail_thread_content
     - get_gmail_attachment_content
+    - get_gmail_thread_content
     - modify_gmail_message_labels
     - list_gmail_labels
     - manage_gmail_label
@@ -25,11 +25,18 @@ drive:
   core:
     - search_drive_files
     - get_drive_file_content
+    - get_drive_file_download_url
     - create_drive_file
+    - share_drive_file
+    - get_drive_shareable_link
   extended:
     - list_drive_items
+    - copy_drive_file
     - update_drive_file
-    - get_drive_file_download_url
+    - update_drive_permission
+    - remove_drive_permission
+    - transfer_drive_ownership
+    - batch_share_drive_file
   complete:
     - get_drive_file_permissions
     - check_drive_file_public_access
@@ -42,6 +49,7 @@ calendar:
     - modify_event
   extended:
     - delete_event
+    - query_freebusy
   complete: []
 
 docs:
@@ -100,6 +108,7 @@ forms:
   complete:
     - set_publish_settings
     - get_form_response
+    - batch_update_form
 
 slides:
   core:
@@ -139,3 +148,25 @@ search:
     - search_custom_siterestrict
   complete:
     - get_search_engine_info
+
+appscript:
+  core:
+    - list_script_projects
+    - get_script_project
+    - get_script_content
+    - create_script_project
+    - update_script_content
+    - run_script_function
+    - generate_trigger_code
+  extended:
+    - create_deployment
+    - list_deployments
+    - update_deployment
+    - delete_deployment
+    - delete_script_project
+    - list_versions
+    - create_version
+    - get_version
+    - list_script_processes
+    - get_script_metrics
+  complete: []
