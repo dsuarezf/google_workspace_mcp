@@ -8,7 +8,6 @@ import logging
 import asyncio
 import base64
 import ssl
-import re
 from html.parser import HTMLParser
 from typing import Optional, List, Dict, Literal, Any
 
