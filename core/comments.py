@@ -195,7 +195,7 @@ async def _read_comments_impl(service, app_name: str, file_id: str) -> str:
         service.comments()
         .list(
             fileId=file_id,
-            fields="comments(id,content,author,createdTime,modifiedTime,resolved,replies(content,author,id,createdTime,modifiedTime))",
+            fields="comments(id,content,author,createdTime,modifiedTime,resolved,anchor,quotedFileContent,replies(content,author,id,createdTime,modifiedTime))",
         )
         .execute
     )
@@ -215,9 +215,19 @@ async def _read_comments_impl(service, app_name: str, file_id: str) -> str:
         comment_id = comment.get("id", "")
         status = " [RESOLVED]" if resolved else ""
 
+        # Get anchor information (cell location for Sheets)
+        anchor = comment.get("anchor", "")
+        quoted_content = comment.get("quotedFileContent", {})
+
         output.append(f"Comment ID: {comment_id}")
         output.append(f"Author: {author}")
         output.append(f"Created: {created}{status}")
+        if anchor:
+            output.append(f"Location: {anchor}")
+        if quoted_content:
+            quoted_value = quoted_content.get("value", "")
+            if quoted_value:
+                output.append(f"Quoted content: {quoted_value}")
         output.append(f"Content: {content}")
 
         # Add replies if any
